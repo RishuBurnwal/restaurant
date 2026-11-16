@@ -41,6 +41,27 @@ jobs:
             exit 1
           fi
 
+      - name: Check required secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -z "${SSH_PRIVATE_KEY:-}" ] && missing="$missing SSH_PRIVATE_KEY"
+          [ -z "${SSH_HOST:-}" ]        && missing="$missing SSH_HOST"
+          [ -z "${SSH_USER:-}" ]        && missing="$missing SSH_USER"
+          [ -z "${DEPLOY_PATH:-}" ]     && missing="$missing DEPLOY_PATH"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            echo "Set them in Settings > Secrets and variables > Actions."
+            echo "See README.md section 4.3."
+            exit 1
+          fi
+          echo "All required secrets are present."
+
       - name: Install deploy SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -55,7 +76,11 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
 
           PORT="${SSH_PORT:-18765}"
-          ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null || true
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::Could not read the host key from $SSH_HOST:$PORT (blocked or wrong port)."
+            exit 1
+          fi
 
           # Optional pinning: fail if the server key does not match the pinned fingerprint.
           if [ -n "${SSH_KNOWN_HOSTS_FINGERPRINT:-}" ]; then
