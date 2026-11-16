@@ -5,6 +5,11 @@ Upstream repo: <https://github.com/anuranjanverma/restaurant>
 **Working fork (owner/admin):** <https://github.com/RishuBurnwal/restaurant>
 Staging branch: `rishu.dev` (production branch stays `main`, untouched)
 
+> **Status: working end to end.** A push to `rishu.dev` deploys to SiteGround and the
+> result is verifiable over HTTPS. Latest verified run:
+> [43975023555](https://github.com/RishuBurnwal/restaurant/actions/runs/43975023555) —
+> `push` event, success.
+
 > **Read this first.** The pipeline lives in both repositories, but it can only be
 > *configured* in the fork. GitHub requires **admin** rights to create Actions secrets and
 > environments, and the upstream repo is owned by another account where this operator has
@@ -327,6 +332,7 @@ Do this only after `rishu.dev` has been trusted for a while.
 | `.deployignore` | rsync exclude list (secrets, uploads, caches) |
 | `.gitignore` | same intent, for git |
 | `.gitattributes` | forces LF so CI scripts do not break |
+| `wp-content/themes/webkarma-restaurant/` | the live custom theme, now version-controlled |
 | `deploy-test.html` | visible end-to-end proof page |
 | `scripts/build_docx.py` | regenerates `restaurant-deploy-guide.docx` from this README |
 | `restaurant-deploy-guide.docx` | this runbook as a Word document |
@@ -361,11 +367,11 @@ Code changes still flow to the upstream `rishu.dev` branch so the owner sees the
 the secret. If you want deploys to run from the upstream repo, an upstream admin must add
 the five secrets there (see §4.3). Nothing else needs to change.
 
-### Q3. Why can the pipeline not deploy yet even with the fork?
+### Q3. Why did the pipeline not deploy at first?
 
-Because the SiteGround **SSH credentials for this specific site are unknown**. The only
-SSH documentation supplied (`SITEGROUND_SSH_README.md`) is for a *different* SiteGround
-site, `anuranjanv11.sg-host.com`. That was verified, not assumed:
+Because the SiteGround **SSH credentials for this site were not documented anywhere**.
+The only SSH docs supplied were for *different* SiteGround sites, and that was verified,
+not assumed:
 
 ```
 ssh.anuranjanv17.sg-host.com -> 35.213.159.179
@@ -375,14 +381,38 @@ ssh.anuranjanv11.sg-host.com -> 35.215.123.230     # different server
 [u2232-vrgvjoy5xdtu @ ssh.anuranjanv11] CONNECT OK
 ```
 
-Each SiteGround site gets its own SSH user on its own endpoint. The restaurant site's
-hostname/port/user must come from **its own** Site Tools → Devs → SSH Keys Manager.
+Each SiteGround site gets its own SSH user on its own endpoint. The correct values were
+then read from **this** site's panel (SSH Keys Manager → Actions → *SSH Credentials*):
+
+| Item | Value |
+|---|---|
+| Host | `ssh.anuranjanv17.sg-host.com` |
+| Port | `18765` |
+| User | `u4079-p7vcwhgrnetu` |
+| Server | `sgp73.siteground.asia`, PHP 8.2.35 |
+| Web root | `/home/customer/www/anuranjanv17.sg-host.com/public_html` |
+| Staging path | `…/public_html/rishu-test` |
+| Key name in panel | `gh-actions-deploy-rishu-dev` |
+
+The deploy key is registered in the panel; the matching private key lives only in the
+local `deploy-keys/` folder and in the `SSH_PRIVATE_KEY` repository secret.
+
+Note: SiteGround shows no `SSH Credentials` card until at least one key exists. Before
+the key was imported the page looked like SSH was unavailable — it was not.
 
 ### Q4. Can the same SSH key be reused across sites?
 
 No. The key was accepted on the v11 server and rejected on the v17 server, because the
 *user* does not exist there. Generate a dedicated key per site (§4.1). Reusing a key
 across sites is a security anti-pattern anyway — revoking one would break the other.
+
+### Q4b. Does GitHub run workflows in a fork automatically?
+
+**Not until you enable them once.** A fresh fork has Actions present but suppressed, so
+`push` events silently do nothing while `workflow_dispatch` still works — which is a
+confusing combination. Fix: open `/<fork>/actions` and click
+**“I understand my workflows, go ahead and enable them.”** After that, pushes trigger
+normally. This cost one debugging cycle; it is now enabled on `RishuBurnwal/restaurant`.
 
 ### Q5. Why deploy to `/rishu-test/` instead of `public_html`?
 
