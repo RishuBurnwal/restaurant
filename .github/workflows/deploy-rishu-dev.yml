@@ -1,0 +1,135 @@
+name: Deploy rishu.dev -> SiteGround staging
+
+# Trigger: any push to the rishu.dev branch, or a manual run.
+# Safe by design:
+#   * rsync runs WITHOUT --delete (nothing on the server is ever removed)
+#   * a --dry-run pass always runs first and its output is printed
+#   * only the staging target path is written to
+on:
+  push:
+    branches: ["rishu.dev"]
+  workflow_dispatch:
+    inputs:
+      dry_run_only:
+        description: "Only run the rsync dry-run (no files written)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-rishu-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: rsync deploy to staging
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html
+
+    steps:
+      - name: Checkout rishu.dev
+        uses: actions/checkout@v4
+
+      - name: Guard - never deploy from main
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "::error::Refusing to deploy from main. Only rishu.dev may deploy to staging."
+            exit 1
+          fi
+
+      - name: Install deploy SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_KNOWN_HOSTS_FINGERPRINT: ${{ secrets.SSH_KNOWN_HOSTS_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          PORT="${SSH_PORT:-18765}"
+          ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+
+          # Optional pinning: fail if the server key does not match the pinned fingerprint.
+          if [ -n "${SSH_KNOWN_HOSTS_FINGERPRINT:-}" ]; then
+            echo "Pinned fingerprint: $SSH_KNOWN_HOSTS_FINGERPRINT"
+            ssh-keygen -lf ~/.ssh/known_hosts | tee /tmp/keys.txt
+            if ! grep -qiF "$SSH_KNOWN_HOSTS_FINGERPRINT" /tmp/keys.txt; then
+              echo "::error::SSH host key fingerprint mismatch - refusing to deploy."
+              exit 1
+            fi
+          fi
+
+          cat >> ~/.ssh/config <<EOF
+          Host sg-deploy
+            HostName $SSH_HOST
+            Port $PORT
+            User ${{ secrets.SSH_USER }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            LogLevel ERROR
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Verify SSH + target path
+        run: |
+          set -euo pipefail
+          ssh sg-deploy 'echo "connected as $(whoami)"; pwd'
+          ssh sg-deploy "test -d '${{ secrets.DEPLOY_PATH }}' && echo 'target exists' || (echo '::error::DEPLOY_PATH missing'; exit 1)"
+
+      - name: Preflight - rsync dry-run
+        run: |
+          set -euo pipefail
+          rsync -az --dry-run --itemize-changes --stats \
+            -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:${{ secrets.DEPLOY_PATH }}/" | tee dryrun.txt
+          echo "---- dry-run summary ----"
+          grep -E 'Number of (files|regular files transferred)|Total file size' dryrun.txt || true
+
+      - name: Deploy (rsync, no --delete)
+        if: ${{ inputs.dry_run_only != true }}
+        run: |
+          set -euo pipefail
+          rsync -az --itemize-changes \
+            -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:${{ secrets.DEPLOY_PATH }}/"
+
+      - name: Prove file landed on the server
+        if: ${{ inputs.dry_run_only != true }}
+        run: |
+          set -euo pipefail
+          ssh sg-deploy "ls -l --time-style=full-iso '${{ secrets.DEPLOY_PATH }}/deploy-test.html'"
+
+      - name: Live check
+        if: ${{ inputs.dry_run_only != true }}
+        run: |
+          set -euo pipefail
+          URL="https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html?cb=$(date +%s)"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/out.html -w '%{http_code}' "$URL")
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && { grep -o 'Deployed via rishu.dev[^<]*' /tmp/out.html || true; exit 0; }
+            sleep 10
+          done
+          echo "::error::Live URL did not return 200"
+          exit 1
+
+      - name: Upload deploy log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-log
+          path: |
+            dryrun.txt
+          if-no-files-found: ignore
