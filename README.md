@@ -1,8 +1,14 @@
 # restaurant — rishu.dev → SiteGround staging auto-deploy
 
 Live site: <https://anuranjanv17.sg-host.com/>
-Repo: <https://github.com/anuranjanverma/restaurant>
+Upstream repo: <https://github.com/anuranjanverma/restaurant>
+**Working fork (owner/admin):** <https://github.com/RishuBurnwal/restaurant>
 Staging branch: `rishu.dev` (production branch stays `main`, untouched)
+
+> **Read this first.** The pipeline lives in both repositories, but it can only be
+> *configured* in the fork. GitHub requires **admin** rights to create Actions secrets and
+> environments, and the upstream repo is owned by another account where this operator has
+> only `push`. See [§11 FAQ](#11-faq--known-limitations) for the full explanation.
 
 This README is a complete, repeatable runbook. Follow it top to bottom and anyone can
 re-create the entire pipeline from scratch.
@@ -322,4 +328,107 @@ Do this only after `rishu.dev` has been trusted for a while.
 | `.gitignore` | same intent, for git |
 | `.gitattributes` | forces LF so CI scripts do not break |
 | `deploy-test.html` | visible end-to-end proof page |
+| `scripts/build_docx.py` | regenerates `restaurant-deploy-guide.docx` from this README |
+| `restaurant-deploy-guide.docx` | this runbook as a Word document |
 | `README.md` | this runbook |
+
+---
+
+## 11. FAQ / known limitations
+
+### Q1. Why did both workflow runs fail with "Missing repository secrets"?
+
+Because the workflow ran in `anuranjanverma/restaurant`, where the operator account
+(`RishuBurnwal`) has `push` permission but **not `admin`**. GitHub only allows repository
+admins to create Actions secrets and environments. Creating a secret there returns:
+
+```
+gh: Must have admin rights to Repository. (HTTP 403)
+```
+
+The failure is therefore a *permissions* failure, not a bug in the pipeline. The run log
+shows all five secrets resolving to empty strings, and the `Check required secrets` step
+stops the job before anything touches a server.
+
+### Q2. What was done about it?
+
+A fork was created under the operator's own account — [RishuBurnwal/restaurant](https://github.com/RishuBurnwal/restaurant) —
+where the operator *is* admin. The `staging` environment was created there successfully.
+All future configuration (secrets, environments, required reviewers) happens in the fork.
+Code changes still flow to the upstream `rishu.dev` branch so the owner sees them.
+
+**Consequence:** a workflow that needs secrets must be configured in whichever repo owns
+the secret. If you want deploys to run from the upstream repo, an upstream admin must add
+the five secrets there (see §4.3). Nothing else needs to change.
+
+### Q3. Why can the pipeline not deploy yet even with the fork?
+
+Because the SiteGround **SSH credentials for this specific site are unknown**. The only
+SSH documentation supplied (`SITEGROUND_SSH_README.md`) is for a *different* SiteGround
+site, `anuranjanv11.sg-host.com`. That was verified, not assumed:
+
+```
+ssh.anuranjanv17.sg-host.com -> 35.213.159.179
+ssh.anuranjanv11.sg-host.com -> 35.215.123.230     # different server
+
+[u2232-vrgvjoy5xdtu @ ssh.anuranjanv17] AUTH FAILED (user rejected)
+[u2232-vrgvjoy5xdtu @ ssh.anuranjanv11] CONNECT OK
+```
+
+Each SiteGround site gets its own SSH user on its own endpoint. The restaurant site's
+hostname/port/user must come from **its own** Site Tools → Devs → SSH Keys Manager.
+
+### Q4. Can the same SSH key be reused across sites?
+
+No. The key was accepted on the v11 server and rejected on the v17 server, because the
+*user* does not exist there. Generate a dedicated key per site (§4.1). Reusing a key
+across sites is a security anti-pattern anyway — revoking one would break the other.
+
+### Q5. Why deploy to `/rishu-test/` instead of `public_html`?
+
+The live site is a production WordPress install. Writing a pipeline to its web root
+before the pipeline has ever succeeded once is the fastest way to take the site down.
+`/rishu-test/` is a subfolder: WordPress never routes to it, cached pages are unaffected,
+and a failure there is invisible to visitors. Promote to `public_html` only after the
+staging loop has been green several times (§8).
+
+### Q6. Does the pipeline ever delete files on the server?
+
+No. `rsync` runs without `--delete`, and no workflow input can enable it. The worst case
+for this pipeline is *stale* files, never *missing* files.
+
+### Q7. The site is WordPress — won't rsync overwrite plugins and themes?
+
+Only if you commit those paths. `wp-content/uploads/`, caches, backups and `node_modules/`
+are excluded, but `wp-content/themes/**` and `wp-content/plugins/**` are *not* — that is
+deliberate, because that is usually the code you actually want to ship. If you do not want
+to manage those from git, add those directories to `.deployignore` **before** the first
+deploy to a shared path.
+
+### Q8. Why is the workflow pinned to `ssh-keyscan` and a fingerprint secret?
+
+`StrictHostKeyChecking yes` without a known host key would make every run fail. Scanning
+the key on each run trusts whatever answers; hence the optional
+`SSH_KNOWN_HOSTS_FINGERPRINT` secret, which turns a silent trust into a hard failure when
+the server key changes.
+
+### Q9. Can GitHub Actions reach SiteGround on port 22?
+
+Usually not — SiteGround serves SSH on a high port (`18765` on the observed account).
+`SSH_PORT` is a secret for exactly this reason. Never hardcode 22.
+
+### Q10. What if `rsync` is missing on the server?
+
+SiteGround normally includes it. If a run reports `rsync: command not found`, replace the
+two `rsync` invocations with `tar` over `ssh` or `scp`, or install nothing and use SFTP
+(Python `paramiko`, `sftp.put`).
+
+### Q11. How do I prove a deploy really happened, not just that CI was green?
+
+CI green only proves rsync exited 0. Real proof is three layers:
+1. the workflow's `ls -l --time-style=full-iso` output on the server,
+2. the `curl` live check step returning 200,
+3. a human opening the URL with a cache-buster in a browser.
+All three are built into the workflow except the browser, which is why §6 exists.
+
+---
