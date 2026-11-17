@@ -70,7 +70,8 @@ jobs:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          case "$DEPLOY_PATH" in
+          p="${DEPLOY_PATH%/}"
+          case "$p" in
             */staging2.anuranjanv17.sg-host.com/public_html) ;;
             *) echo "::error::DEPLOY_PATH does not point at staging2: $DEPLOY_PATH"; exit 1 ;;
           esac
@@ -230,11 +231,12 @@ jobs:
           DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
         run: |
           set -euo pipefail
-          case "$DEPLOY_PATH_PROD" in
+          p="${DEPLOY_PATH_PROD%/}"
+          case "$p" in
             */anuranjanv17.sg-host.com/public_html) ;;
             *) echo "::error::DEPLOY_PATH_PROD is not the production web root: $DEPLOY_PATH_PROD"; exit 1 ;;
           esac
-          case "$DEPLOY_PATH_PROD" in
+          case "$p" in
             *staging*) echo "::error::DEPLOY_PATH_PROD points at staging: $DEPLOY_PATH_PROD"; exit 1 ;;
           esac
 
