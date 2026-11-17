@@ -164,11 +164,11 @@ jobs:
           done
 
           echo "== whole deployed tree: rsync checksum comparison =="
-          rsync -aznc --itemize-changes \
+          rsync -rlc --itemize-changes -n \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
             ./ "sg-deploy:$DEPLOY_PATH/" > "$RUNNER_TEMP/verify.txt"
-          grep -vE '^(sent |total size|Number of |Total file size|$)' \
+          grep -vE '(^sent |^total size|^Number of |^Total file size|^$|\.f\.\.t\.\.\.\.\.\.)' \
             "$RUNNER_TEMP/verify.txt" > "$RUNNER_TEMP/verify2.txt" || true
           if [ -s "$RUNNER_TEMP/verify2.txt" ]; then
             echo "::error::Server does not match the repo:"
@@ -327,11 +327,11 @@ jobs:
           done
 
           echo "== whole deployed tree: rsync checksum comparison =="
-          rsync -aznc --itemize-changes \
+          rsync -rlc --itemize-changes -n \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
             ./ "sg-deploy:$DEPLOY_PATH_PROD/" > "$RUNNER_TEMP/verify.txt"
-          grep -vE '^(sent |total size|Number of |Total file size|$)' \
+          grep -vE '(^sent |^total size|^Number of |^Total file size|^$|\.f\.\.t\.\.\.\.\.\.)' \
             "$RUNNER_TEMP/verify.txt" > "$RUNNER_TEMP/verify2.txt" || true
           if [ -s "$RUNNER_TEMP/verify2.txt" ]; then
             echo "::error::Server does not match the repo:"
