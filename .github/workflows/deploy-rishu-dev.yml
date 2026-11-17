@@ -156,29 +156,48 @@ jobs:
           set -euo pipefail
           ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH/deploy-test.html'"
 
-      - name: Live check (best effort)
+      - name: Verify on server (filesystem, no HTTP)
         if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          set -uo pipefail
-          URL="http://staging2.anuranjanv17.sg-host.com/deploy-test.html?cb=$(date +%s)"
-          code=$(curl -s -m 25 -o /tmp/out.html -w '%{http_code}' "$URL" || true)
-          echo "HTTP $code"
-          case "$code" in
-            200) grep -o 'Deployed via[^<]*' /tmp/out.html || true;;
-            202|401|403)
-              echo "::warning::staging2 answered $code (SiteGround holding page or access gate)."
-              echo "::warning::Files were already verified over SSH in the previous step.";;
-            *)
-              echo "::warning::staging2 answered '${code:-no response}'."
-              echo "::warning::Files were already verified over SSH in the previous step.";;
-          esac
+          set -euo pipefail
+          echo "== files on the server =="
+          ssh sg-deploy "stat -c '%n | %s bytes | %y' \
+            '$DEPLOY_PATH/deploy-test.html' \
+            '$DEPLOY_PATH/wp-content/themes/webkarma-restaurant/style.css'"
+
+          echo "== checksum: local vs server =="
+          for f in deploy-test.html wp-content/themes/webkarma-restaurant/style.css; do
+            local_sum=$(sha256sum "$f" | cut -d' ' -f1)
+            remote_sum=$(ssh sg-deploy "sha256sum '$DEPLOY_PATH/$f'" | cut -d' ' -f1)
+            echo "$f"
+            echo "  local : $local_sum"
+            echo "  server: $remote_sum"
+            [ "$local_sum" = "$remote_sum" ] || { echo "::error::$f differs on the server"; exit 1; }
+          done
+
+          echo "== re-run dry-run: must report nothing pending =="
+          rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:$DEPLOY_PATH/" > pending.txt
+          grep -vE '^(sent |total size|Number of |Total file size|$)' pending.txt > pending2.txt || true
+          if [ -s pending2.txt ]; then
+            echo "::error::Server tree does not match the repo:"
+            cat pending2.txt
+            exit 1
+          fi
+          echo "server tree matches the repo exactly."
 
       - name: Upload deploy log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deploy-log-staging
-          path: dryrun.txt
+          path: |
+            dryrun.txt
+            pending.txt
+            pending2.txt
           if-no-files-found: ignore
 
   deploy_production:
@@ -313,24 +332,46 @@ jobs:
           set -euo pipefail
           ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH_PROD/deploy-test.html'"
 
-      - name: Live check
+      - name: Verify on server (filesystem, no HTTP)
         if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
         run: |
           set -euo pipefail
-          URL="https://anuranjanv17.sg-host.com/deploy-test.html?cb=$(date +%s)"
-          for i in 1 2 3 4 5; do
-            code=$(curl -s -o /tmp/out.html -w '%{http_code}' "$URL")
-            echo "attempt $i -> $code"
-            [ "$code" = "200" ] && { grep -o 'Deployed via[^<]*' /tmp/out.html || true; exit 0; }
-            sleep 10
+          echo "== files on the server =="
+          ssh sg-deploy "stat -c '%n | %s bytes | %y' \
+            '$DEPLOY_PATH_PROD/deploy-test.html' \
+            '$DEPLOY_PATH_PROD/wp-content/themes/webkarma-restaurant/style.css'"
+
+          echo "== checksum: local vs server =="
+          for f in deploy-test.html wp-content/themes/webkarma-restaurant/style.css; do
+            local_sum=$(sha256sum "$f" | cut -d' ' -f1)
+            remote_sum=$(ssh sg-deploy "sha256sum '$DEPLOY_PATH_PROD/$f'" | cut -d' ' -f1)
+            echo "$f"
+            echo "  local : $local_sum"
+            echo "  server: $remote_sum"
+            [ "$local_sum" = "$remote_sum" ] || { echo "::error::$f differs on the server"; exit 1; }
           done
-          echo "::error::Live production URL did not return 200"
-          exit 1
+
+          echo "== re-run dry-run: must report nothing pending =="
+          rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:$DEPLOY_PATH_PROD/" > pending.txt
+          grep -vE '^(sent |total size|Number of |Total file size|$)' pending.txt > pending2.txt || true
+          if [ -s pending2.txt ]; then
+            echo "::error::Server tree does not match the repo:"
+            cat pending2.txt
+            exit 1
+          fi
+          echo "server tree matches the repo exactly."
 
       - name: Upload deploy log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: deploy-log-production
-          path: dryrun.txt
+          path: |
+            dryrun.txt
+            pending.txt
+            pending2.txt
           if-no-files-found: ignore
