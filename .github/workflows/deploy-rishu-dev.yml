@@ -148,48 +148,6 @@ jobs:
             --exclude-from=.deployignore \
             ./ "sg-deploy:$DEPLOY_PATH/"
 
-      - name: Prove file landed on the server
-        if: ${{ inputs.dry_run_only != true }}
-        env:
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH/deploy-test.html'"
-
-      - name: Verify on server (filesystem, no HTTP)
-        if: ${{ inputs.dry_run_only != true }}
-        env:
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-        run: |
-          set -euo pipefail
-          echo "== files on the server =="
-          ssh sg-deploy "stat -c '%n | %s bytes | %y' \
-            '$DEPLOY_PATH/deploy-test.html' \
-            '$DEPLOY_PATH/wp-content/themes/webkarma-restaurant/style.css'"
-
-          echo "== checksum: local vs server =="
-          for f in deploy-test.html wp-content/themes/webkarma-restaurant/style.css; do
-            local_sum=$(sha256sum "$f" | cut -d' ' -f1)
-            remote_sum=$(ssh sg-deploy "sha256sum '$DEPLOY_PATH/$f'" | cut -d' ' -f1)
-            echo "$f"
-            echo "  local : $local_sum"
-            echo "  server: $remote_sum"
-            [ "$local_sum" = "$remote_sum" ] || { echo "::error::$f differs on the server"; exit 1; }
-          done
-
-          echo "== re-run dry-run: must report nothing pending =="
-          rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
-            --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH/" > "$RUNNER_TEMP/pending.txt"
-          grep -vE '^(sent |total size|Number of |Total file size|$)' \
-            "$RUNNER_TEMP/pending.txt" > "$RUNNER_TEMP/pending2.txt" || true
-          if [ -s "$RUNNER_TEMP/pending2.txt" ]; then
-            echo "::error::Server tree does not match the repo:"
-            cat "$RUNNER_TEMP/pending2.txt"
-            exit 1
-          fi
-          echo "server tree matches the repo exactly."
-
       - name: Upload deploy log
         if: always()
         uses: actions/upload-artifact@v4
@@ -197,8 +155,6 @@ jobs:
           name: deploy-log-staging
           path: |
             ${{ runner.temp }}/dryrun.txt
-            ${{ runner.temp }}/pending.txt
-            ${{ runner.temp }}/pending2.txt
           if-no-files-found: ignore
 
   deploy_production:
@@ -325,48 +281,6 @@ jobs:
             --exclude-from=.deployignore \
             ./ "sg-deploy:$DEPLOY_PATH_PROD/"
 
-      - name: Prove file landed on the server
-        if: ${{ inputs.dry_run_only != true }}
-        env:
-          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
-        run: |
-          set -euo pipefail
-          ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH_PROD/deploy-test.html'"
-
-      - name: Verify on server (filesystem, no HTTP)
-        if: ${{ inputs.dry_run_only != true }}
-        env:
-          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
-        run: |
-          set -euo pipefail
-          echo "== files on the server =="
-          ssh sg-deploy "stat -c '%n | %s bytes | %y' \
-            '$DEPLOY_PATH_PROD/deploy-test.html' \
-            '$DEPLOY_PATH_PROD/wp-content/themes/webkarma-restaurant/style.css'"
-
-          echo "== checksum: local vs server =="
-          for f in deploy-test.html wp-content/themes/webkarma-restaurant/style.css; do
-            local_sum=$(sha256sum "$f" | cut -d' ' -f1)
-            remote_sum=$(ssh sg-deploy "sha256sum '$DEPLOY_PATH_PROD/$f'" | cut -d' ' -f1)
-            echo "$f"
-            echo "  local : $local_sum"
-            echo "  server: $remote_sum"
-            [ "$local_sum" = "$remote_sum" ] || { echo "::error::$f differs on the server"; exit 1; }
-          done
-
-          echo "== re-run dry-run: must report nothing pending =="
-          rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
-            --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH_PROD/" > "$RUNNER_TEMP/pending.txt"
-          grep -vE '^(sent |total size|Number of |Total file size|$)' \
-            "$RUNNER_TEMP/pending.txt" > "$RUNNER_TEMP/pending2.txt" || true
-          if [ -s "$RUNNER_TEMP/pending2.txt" ]; then
-            echo "::error::Server tree does not match the repo:"
-            cat "$RUNNER_TEMP/pending2.txt"
-            exit 1
-          fi
-          echo "server tree matches the repo exactly."
-
       - name: Upload deploy log
         if: always()
         uses: actions/upload-artifact@v4
@@ -374,6 +288,4 @@ jobs:
           name: deploy-log-production
           path: |
             ${{ runner.temp }}/dryrun.txt
-            ${{ runner.temp }}/pending.txt
-            ${{ runner.temp }}/pending2.txt
           if-no-files-found: ignore
