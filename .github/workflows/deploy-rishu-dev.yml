@@ -133,9 +133,9 @@ jobs:
           rsync -az --dry-run --itemize-changes --stats \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH/" | tee dryrun.txt
+            ./ "sg-deploy:$DEPLOY_PATH/" | tee "$RUNNER_TEMP/dryrun.txt"
           echo "---- dry-run summary ----"
-          grep -E 'Number of (files|regular files transferred)|Total file size' dryrun.txt || true
+          grep -E 'Number of (files|regular files transferred)|Total file size' "$RUNNER_TEMP/dryrun.txt" || true
 
       - name: Deploy (rsync, no --delete)
         if: ${{ inputs.dry_run_only != true }}
@@ -180,11 +180,12 @@ jobs:
           echo "== re-run dry-run: must report nothing pending =="
           rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH/" > pending.txt
-          grep -vE '^(sent |total size|Number of |Total file size|$)' pending.txt > pending2.txt || true
-          if [ -s pending2.txt ]; then
+            ./ "sg-deploy:$DEPLOY_PATH/" > "$RUNNER_TEMP/pending.txt"
+          grep -vE '^(sent |total size|Number of |Total file size|$)' \
+            "$RUNNER_TEMP/pending.txt" > "$RUNNER_TEMP/pending2.txt" || true
+          if [ -s "$RUNNER_TEMP/pending2.txt" ]; then
             echo "::error::Server tree does not match the repo:"
-            cat pending2.txt
+            cat "$RUNNER_TEMP/pending2.txt"
             exit 1
           fi
           echo "server tree matches the repo exactly."
@@ -195,9 +196,9 @@ jobs:
         with:
           name: deploy-log-staging
           path: |
-            dryrun.txt
-            pending.txt
-            pending2.txt
+            ${{ runner.temp }}/dryrun.txt
+            ${{ runner.temp }}/pending.txt
+            ${{ runner.temp }}/pending2.txt
           if-no-files-found: ignore
 
   deploy_production:
@@ -309,9 +310,9 @@ jobs:
           rsync -az --dry-run --itemize-changes --stats \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH_PROD/" | tee dryrun.txt
+            ./ "sg-deploy:$DEPLOY_PATH_PROD/" | tee "$RUNNER_TEMP/dryrun.txt"
           echo "---- dry-run summary ----"
-          grep -E 'Number of (files|regular files transferred)|Total file size' dryrun.txt || true
+          grep -E 'Number of (files|regular files transferred)|Total file size' "$RUNNER_TEMP/dryrun.txt" || true
 
       - name: Deploy (rsync, no --delete)
         if: ${{ inputs.dry_run_only != true }}
@@ -356,11 +357,12 @@ jobs:
           echo "== re-run dry-run: must report nothing pending =="
           rsync -azn -i -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:$DEPLOY_PATH_PROD/" > pending.txt
-          grep -vE '^(sent |total size|Number of |Total file size|$)' pending.txt > pending2.txt || true
-          if [ -s pending2.txt ]; then
+            ./ "sg-deploy:$DEPLOY_PATH_PROD/" > "$RUNNER_TEMP/pending.txt"
+          grep -vE '^(sent |total size|Number of |Total file size|$)' \
+            "$RUNNER_TEMP/pending.txt" > "$RUNNER_TEMP/pending2.txt" || true
+          if [ -s "$RUNNER_TEMP/pending2.txt" ]; then
             echo "::error::Server tree does not match the repo:"
-            cat pending2.txt
+            cat "$RUNNER_TEMP/pending2.txt"
             exit 1
           fi
           echo "server tree matches the repo exactly."
@@ -371,7 +373,7 @@ jobs:
         with:
           name: deploy-log-production
           path: |
-            dryrun.txt
-            pending.txt
-            pending2.txt
+            ${{ runner.temp }}/dryrun.txt
+            ${{ runner.temp }}/pending.txt
+            ${{ runner.temp }}/pending2.txt
           if-no-files-found: ignore
