@@ -3,7 +3,7 @@
 Live site: <https://anuranjanv17.sg-host.com/>
 Upstream repo: <https://github.com/anuranjanverma/restaurant>
 **Working fork (owner/admin):** <https://github.com/RishuBurnwal/restaurant>
-Staging branches: `main` and `rishu.dev` — **both deploy** to `/rishu-test/`.
+Branches: `main` and `rishu.dev` — **both deploy** to the live web root (`public_html`).
 `main` also carries the site content, so the repo landing page shows the code.
 
 > **Status: working end to end.** A push to `main` or `rishu.dev` deploys to SiteGround and the
@@ -11,10 +11,10 @@ Staging branches: `main` and `rishu.dev` — **both deploy** to `/rishu-test/`.
 > [43975023555](https://github.com/RishuBurnwal/restaurant/actions/runs/43975023555) —
 > `push` event, success.
 
-> **Read this first.** The pipeline lives in both repositories, but it can only be
-> *configured* in the fork. GitHub requires **admin** rights to create Actions secrets and
-> environments, and the upstream repo is owned by another account where this operator has
-> only `push`. See [§11 FAQ](#11-faq--known-limitations) for the full explanation.
+> **Read this first.** The pipeline lives in both repositories. Secrets can be written with
+> `push` access on both; only *environment settings* (approval rules, branch protection)
+> need `admin`, which the upstream repo's owner has and this operator does not. See
+> [§11 FAQ](#11-faq--known-limitations) for the full explanation.
 
 This README is a complete, repeatable runbook. Follow it top to bottom and anyone can
 re-create the entire pipeline from scratch.
@@ -39,7 +39,7 @@ GitHub Actions  .github/workflows/deploy-rishu-dev.yml
       │  7. ls -l on the server  (proves the file landed)
       │  8. curl the live URL    (proves the public web layer serves it)
       ▼
-https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html
+https://anuranjanv17.sg-host.com/deploy-test.html
 ```
 
 Nothing on the server is ever deleted: `--delete` is deliberately absent, and deleting
@@ -59,7 +59,7 @@ is not exposed as a workflow input.
 | Man-in-the-middle on SSH | `ssh-keyscan` + optional pinned fingerprint secret; `StrictHostKeyChecking yes` |
 | Deploy storms | `concurrency: deploy-rishu-dev` with `cancel-in-progress: false` |
 
-Deployment target is a **subfolder** (`/rishu-test/`), not the web root, so the live
+Deployment target is the **live web root** (`public_html`). rsync has no `--delete`, so the live
 WordPress site cannot be affected while the pipeline is being proven.
 
 ---
@@ -122,7 +122,7 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 | `SSH_HOST` | SSH host from Site Tools |
 | `SSH_PORT` | SSH port from Site Tools |
 | `SSH_USER` | SSH username from Site Tools |
-| `DEPLOY_PATH` | absolute server path, e.g. `/home/customer/www/anuranjanv17.sg-host.com/public_html/rishu-test` |
+| `DEPLOY_PATH` | absolute server path, e.g. `/home/customer/www/anuranjanv17.sg-host.com/public_html` |
 | `SSH_KNOWN_HOSTS_FINGERPRINT` | *(optional)* pinned host key fingerprint, see 4.5 |
 
 Via CLI (requires repo admin):
@@ -132,7 +132,7 @@ gh secret set SSH_PRIVATE_KEY --repo anuranjanverma/restaurant < deploy-keys\sg_
 gh secret set SSH_HOST --repo anuranjanverma/restaurant --body "ssh.example.com"
 gh secret set SSH_PORT --repo anuranjanverma/restaurant --body "18765"
 gh secret set SSH_USER --repo anuranjanverma/restaurant --body "u1234-abc"
-gh secret set DEPLOY_PATH --repo anuranjanverma/restaurant --body "/home/customer/www/anuranjanv17.sg-host.com/public_html/rishu-test"
+gh secret set DEPLOY_PATH --repo anuranjanverma/restaurant --body "/home/customer/www/anuranjanv17.sg-host.com/public_html"
 ```
 
 ### 4.4 Create the `staging` environment (optional but recommended)
@@ -156,8 +156,8 @@ The workflow **fails early** if `DEPLOY_PATH` does not exist, on purpose.
 
 ```bash
 ssh -p 18765 u1234-abc@ssh.example.com
-mkdir -p ~/www/anuranjanv17.sg-host.com/public_html/rishu-test
-chmod 755 ~/www/anuranjanv17.sg-host.com/public_html/rishu-test
+mkdir -p ~/www/anuranjanv17.sg-host.com/public_html
+chmod 755 ~/www/anuranjanv17.sg-host.com/public_html
 exit
 ```
 
@@ -198,7 +198,7 @@ Four independent proofs, cheapest first:
 3. **Server-side** — the *Prove file landed on the server* step prints
    `ls -l --time-style=full-iso …/deploy-test.html`.
 4. **Public web** — open with a cache-buster:
-   <https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html?cb=1>
+   <https://anuranjanv17.sg-host.com/deploy-test.html?cb=1>
 
 Bump `?cb=` (or hard-reload with Ctrl+F5) because SiteGround caches aggressively.
 
@@ -278,7 +278,7 @@ Do this only after `rishu.dev` has been trusted for a while.
          fi
      ```
 
-   * Point `DEPLOY_PATH` at the **real web root** (`public_html`, not `rishu-test`).
+   * `DEPLOY_PATH` already points at the web root (`public_html`).
 
 3. **Use separate secrets for production.** Do not reuse staging secrets. Create a second
    key pair (`deploy-keys/sg_deploy_prod`) and a second SiteGround SSH key, then store it
@@ -392,7 +392,7 @@ then read from **this** site's panel (SSH Keys Manager → Actions → *SSH Cred
 | User | `u4079-p7vcwhgrnetu` |
 | Server | `sgp73.siteground.asia`, PHP 8.2.35 |
 | Web root | `/home/customer/www/anuranjanv17.sg-host.com/public_html` |
-| Staging path | `…/public_html/rishu-test` |
+| Deploy path | `…/public_html` (live web root) |
 | Key name in panel | `gh-actions-deploy-rishu-dev` |
 
 The deploy key is registered in the panel; the matching private key lives only in the
@@ -415,13 +415,12 @@ confusing combination. Fix: open `/<fork>/actions` and click
 **“I understand my workflows, go ahead and enable them.”** After that, pushes trigger
 normally. This cost one debugging cycle; it is now enabled on `RishuBurnwal/restaurant`.
 
-### Q5. Why deploy to `/rishu-test/` instead of `public_html`?
+### Q5. Why deploy to `public_html` instead of `/rishu-test/`?
 
-The live site is a production WordPress install. Writing a pipeline to its web root
-before the pipeline has ever succeeded once is the fastest way to take the site down.
-`/rishu-test/` is a subfolder: WordPress never routes to it, cached pages are unaffected,
-and a failure there is invisible to visitors. Promote to `public_html` only after the
-staging loop has been green several times (§8).
+The pipeline was first proven in a `/rishu-test/` subfolder: WordPress never routes to it,
+cached pages stay untouched, and a failure there is invisible to visitors. Once the loop had
+been green several times, the target was promoted to the live web root (`public_html`).
+`rsync` still runs without `--delete`, so nothing on the live site is ever removed.
 
 ### Q6. Does the pipeline ever delete files on the server?
 

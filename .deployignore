@@ -68,3 +68,6 @@ desktop.ini
 README.md
 DEPLOYMENT.md
 docs/
+scripts/
+*.docx
+.deployignore

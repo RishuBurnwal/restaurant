@@ -1,10 +1,10 @@
-name: Deploy rishu.dev -> SiteGround staging
+name: Deploy -> SiteGround public_html
 
 # Trigger: any push to rishu.dev or main, or a manual run.
 # Safe by design:
 #   * rsync runs WITHOUT --delete (nothing on the server is ever removed)
 #   * a --dry-run pass always runs first and its output is printed
-#   * only the staging target path is written to
+#   * target is the live web root (public_html)
 on:
   push:
     branches: ["rishu.dev", "main"]
@@ -24,11 +24,11 @@ permissions:
 
 jobs:
   deploy:
-    name: rsync deploy to staging
+    name: rsync deploy to public_html
     runs-on: ubuntu-latest
     environment:
       name: staging
-      url: https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html
+      url: https://anuranjanv17.sg-host.com/deploy-test.html
 
     steps:
       - name: Checkout
@@ -137,7 +137,7 @@ jobs:
         if: ${{ inputs.dry_run_only != true }}
         run: |
           set -euo pipefail
-          URL="https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html?cb=$(date +%s)"
+          URL="https://anuranjanv17.sg-host.com/deploy-test.html?cb=$(date +%s)"
           for i in 1 2 3 4 5; do
             code=$(curl -s -o /tmp/out.html -w '%{http_code}' "$URL")
             echo "attempt $i -> $code"
