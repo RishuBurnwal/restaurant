@@ -1,13 +1,13 @@
 name: Deploy rishu.dev -> SiteGround staging
 
-# Trigger: any push to the rishu.dev branch, or a manual run.
+# Trigger: any push to rishu.dev or main, or a manual run.
 # Safe by design:
 #   * rsync runs WITHOUT --delete (nothing on the server is ever removed)
 #   * a --dry-run pass always runs first and its output is printed
 #   * only the staging target path is written to
 on:
   push:
-    branches: ["rishu.dev"]
+    branches: ["rishu.dev", "main"]
   workflow_dispatch:
     inputs:
       dry_run_only:
@@ -31,15 +31,11 @@ jobs:
       url: https://anuranjanv17.sg-host.com/rishu-test/deploy-test.html
 
     steps:
-      - name: Checkout rishu.dev
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Guard - never deploy from main
-        run: |
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
-            echo "::error::Refusing to deploy from main. Only rishu.dev may deploy to staging."
-            exit 1
-          fi
+      - name: Report source branch
+        run: echo "Deploying from branch: ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
 
       - name: Check required secrets
         env:

@@ -3,9 +3,10 @@
 Live site: <https://anuranjanv17.sg-host.com/>
 Upstream repo: <https://github.com/anuranjanverma/restaurant>
 **Working fork (owner/admin):** <https://github.com/RishuBurnwal/restaurant>
-Staging branch: `rishu.dev` (production branch stays `main`, untouched)
+Staging branches: `main` and `rishu.dev` — **both deploy** to `/rishu-test/`.
+`main` also carries the site content, so the repo landing page shows the code.
 
-> **Status: working end to end.** A push to `rishu.dev` deploys to SiteGround and the
+> **Status: working end to end.** A push to `main` or `rishu.dev` deploys to SiteGround and the
 > result is verifiable over HTTPS. Latest verified run:
 > [43975023555](https://github.com/RishuBurnwal/restaurant/actions/runs/43975023555) —
 > `push` event, success.
@@ -266,7 +267,7 @@ Do this only after `rishu.dev` has been trusted for a while.
    * `concurrency.group: deploy-production`
    * `environment.name: production`
    * `environment.url:` the production URL
-   * Replace the *Guard* step with the inverse check — refuse anything that is not `main`:
+   * Add a guard step — refuse anything that is not `main`:
 
      ```yaml
      - name: Guard - production deploys only from main
