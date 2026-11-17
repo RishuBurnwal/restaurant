@@ -1,42 +1,51 @@
-name: Deploy -> SiteGround public_html
+name: Deploy -> SiteGround (staging / production)
 
-# Trigger: any push to rishu.dev or main, or a manual run.
+# Routing:
+#   main / rishu.dev  ->  DEPLOY_PATH      (staging2.anuranjanv17.sg-host.com)
+#   production        ->  DEPLOY_PATH_PROD (anuranjanv17.sg-host.com)
+#
 # Safe by design:
 #   * rsync runs WITHOUT --delete (nothing on the server is ever removed)
 #   * a --dry-run pass always runs first and its output is printed
-#   * target is the live web root (public_html)
+#   * staging and production never write to each other's path
 on:
   push:
-    branches: ["rishu.dev", "main"]
+    branches: ["main", "rishu.dev", "production"]
   workflow_dispatch:
     inputs:
+      target:
+        description: "Where to deploy"
+        type: choice
+        options: [staging, production]
+        default: staging
       dry_run_only:
         description: "Only run the rsync dry-run (no files written)"
         type: boolean
         default: false
 
-concurrency:
-  group: deploy-rishu-dev
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 jobs:
-  deploy:
-    name: rsync deploy to public_html
+  deploy_staging:
+    name: rsync deploy -> staging2
+    if: >-
+      (github.event_name == 'push' && github.ref_name != 'production') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'staging')
     runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
     environment:
       name: staging
-      url: https://anuranjanv17.sg-host.com/deploy-test.html
-
+      url: http://staging2.anuranjanv17.sg-host.com/deploy-test.html
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Report source branch
+      - name: Report source
         run: |
-          echo "Deploying from branch: ${GITHUB_REF_NAME} (${GITHUB_SHA::7})"
+          echo "branch=${GITHUB_REF_NAME} sha=${GITHUB_SHA::7} target=staging"
 
       - name: Check required secrets
         env:
@@ -53,17 +62,25 @@ jobs:
           [ -z "${DEPLOY_PATH:-}" ]     && missing="$missing DEPLOY_PATH"
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secrets:$missing"
-            echo "Set them in Settings > Secrets and variables > Actions."
-            echo "See README.md section 4.3."
             exit 1
           fi
-          echo "All required secrets are present."
+
+      - name: Guard - staging path must be the staging site
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_PATH" in
+            */staging2.anuranjanv17.sg-host.com/public_html) ;;
+            *) echo "::error::DEPLOY_PATH does not point at staging2: $DEPLOY_PATH"; exit 1 ;;
+          esac
 
       - name: Install deploy SSH key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
           SSH_KNOWN_HOSTS_FINGERPRINT: ${{ secrets.SSH_KNOWN_HOSTS_FINGERPRINT }}
         run: |
           set -euo pipefail
@@ -75,13 +92,11 @@ jobs:
           PORT="${SSH_PORT:-18765}"
           ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null || true
           if [ ! -s ~/.ssh/known_hosts ]; then
-            echo "::error::Could not read the host key from $SSH_HOST:$PORT (blocked or wrong port)."
+            echo "::error::Could not read the host key from $SSH_HOST:$PORT."
             exit 1
           fi
 
-          # Optional pinning: fail if the server key does not match the pinned fingerprint.
           if [ -n "${SSH_KNOWN_HOSTS_FINGERPRINT:-}" ]; then
-            echo "Pinned fingerprint: $SSH_KNOWN_HOSTS_FINGERPRINT"
             ssh-keygen -lf ~/.ssh/known_hosts | tee /tmp/keys.txt
             if ! grep -qiF "$SSH_KNOWN_HOSTS_FINGERPRINT" /tmp/keys.txt; then
               echo "::error::SSH host key fingerprint mismatch - refusing to deploy."
@@ -93,7 +108,7 @@ jobs:
           Host sg-deploy
             HostName $SSH_HOST
             Port $PORT
-            User ${{ secrets.SSH_USER }}
+            User $SSH_USER
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
             StrictHostKeyChecking yes
@@ -103,35 +118,197 @@ jobs:
           chmod 600 ~/.ssh/config
 
       - name: Verify SSH + target path
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          ssh sg-deploy 'echo "connected as $(whoami)"; pwd'
-          ssh sg-deploy "test -d '${{ secrets.DEPLOY_PATH }}' && echo 'target exists' || (echo '::error::DEPLOY_PATH missing'; exit 1)"
+          ssh sg-deploy 'echo "connected as $(whoami)"'
+          ssh sg-deploy "test -d '$DEPLOY_PATH' && echo 'target exists' || (echo '::error::DEPLOY_PATH missing'; exit 1)"
 
       - name: Preflight - rsync dry-run
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
           rsync -az --dry-run --itemize-changes --stats \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:${{ secrets.DEPLOY_PATH }}/" | tee dryrun.txt
+            ./ "sg-deploy:$DEPLOY_PATH/" | tee dryrun.txt
           echo "---- dry-run summary ----"
           grep -E 'Number of (files|regular files transferred)|Total file size' dryrun.txt || true
 
       - name: Deploy (rsync, no --delete)
         if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
           rsync -az --itemize-changes \
             -e "ssh -F $HOME/.ssh/config" \
             --exclude-from=.deployignore \
-            ./ "sg-deploy:${{ secrets.DEPLOY_PATH }}/"
+            ./ "sg-deploy:$DEPLOY_PATH/"
 
       - name: Prove file landed on the server
         if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
-          ssh sg-deploy "ls -l --time-style=full-iso '${{ secrets.DEPLOY_PATH }}/deploy-test.html'"
+          ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH/deploy-test.html'"
+
+      - name: Live check
+        if: ${{ inputs.dry_run_only != true }}
+        run: |
+          set -euo pipefail
+          URL="http://staging2.anuranjanv17.sg-host.com/deploy-test.html?cb=$(date +%s)"
+          for i in 1 2 3 4 5; do
+            code=$(curl -s -o /tmp/out.html -w '%{http_code}' "$URL")
+            echo "attempt $i -> $code"
+            [ "$code" = "200" ] && { grep -o 'Deployed via[^<]*' /tmp/out.html || true; exit 0; }
+            sleep 10
+          done
+          echo "::error::Live staging URL did not return 200"
+          exit 1
+
+      - name: Upload deploy log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-log-staging
+          path: dryrun.txt
+          if-no-files-found: ignore
+
+  deploy_production:
+    name: rsync deploy -> production
+    if: >-
+      (github.event_name == 'push' && github.ref_name == 'production') ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'production')
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://anuranjanv17.sg-host.com/deploy-test.html
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Report source
+        run: |
+          echo "branch=${GITHUB_REF_NAME} sha=${GITHUB_SHA::7} target=production"
+
+      - name: Check required secrets
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -z "${SSH_PRIVATE_KEY:-}" ]   && missing="$missing SSH_PRIVATE_KEY"
+          [ -z "${SSH_HOST:-}" ]          && missing="$missing SSH_HOST"
+          [ -z "${SSH_USER:-}" ]          && missing="$missing SSH_USER"
+          [ -z "${DEPLOY_PATH_PROD:-}" ]  && missing="$missing DEPLOY_PATH_PROD"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+
+      - name: Guard - production path must not be the staging site
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          case "$DEPLOY_PATH_PROD" in
+            */anuranjanv17.sg-host.com/public_html) ;;
+            *) echo "::error::DEPLOY_PATH_PROD is not the production web root: $DEPLOY_PATH_PROD"; exit 1 ;;
+          esac
+          case "$DEPLOY_PATH_PROD" in
+            *staging*) echo "::error::DEPLOY_PATH_PROD points at staging: $DEPLOY_PATH_PROD"; exit 1 ;;
+          esac
+
+      - name: Install deploy SSH key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KNOWN_HOSTS_FINGERPRINT: ${{ secrets.SSH_KNOWN_HOSTS_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          PORT="${SSH_PORT:-18765}"
+          ssh-keyscan -p "$PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null || true
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::Could not read the host key from $SSH_HOST:$PORT."
+            exit 1
+          fi
+
+          if [ -n "${SSH_KNOWN_HOSTS_FINGERPRINT:-}" ]; then
+            ssh-keygen -lf ~/.ssh/known_hosts | tee /tmp/keys.txt
+            if ! grep -qiF "$SSH_KNOWN_HOSTS_FINGERPRINT" /tmp/keys.txt; then
+              echo "::error::SSH host key fingerprint mismatch - refusing to deploy."
+              exit 1
+            fi
+          fi
+
+          cat >> ~/.ssh/config <<EOF
+          Host sg-deploy
+            HostName $SSH_HOST
+            Port $PORT
+            User $SSH_USER
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            LogLevel ERROR
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Verify SSH + target path
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          ssh sg-deploy 'echo "connected as $(whoami)"'
+          ssh sg-deploy "test -d '$DEPLOY_PATH_PROD' && echo 'target exists' || (echo '::error::DEPLOY_PATH_PROD missing'; exit 1)"
+
+      - name: Preflight - rsync dry-run
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          rsync -az --dry-run --itemize-changes --stats \
+            -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:$DEPLOY_PATH_PROD/" | tee dryrun.txt
+          echo "---- dry-run summary ----"
+          grep -E 'Number of (files|regular files transferred)|Total file size' dryrun.txt || true
+
+      - name: Deploy (rsync, no --delete)
+        if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          rsync -az --itemize-changes \
+            -e "ssh -F $HOME/.ssh/config" \
+            --exclude-from=.deployignore \
+            ./ "sg-deploy:$DEPLOY_PATH_PROD/"
+
+      - name: Prove file landed on the server
+        if: ${{ inputs.dry_run_only != true }}
+        env:
+          DEPLOY_PATH_PROD: ${{ secrets.DEPLOY_PATH_PROD }}
+        run: |
+          set -euo pipefail
+          ssh sg-deploy "ls -l --time-style=full-iso '$DEPLOY_PATH_PROD/deploy-test.html'"
 
       - name: Live check
         if: ${{ inputs.dry_run_only != true }}
@@ -141,17 +318,16 @@ jobs:
           for i in 1 2 3 4 5; do
             code=$(curl -s -o /tmp/out.html -w '%{http_code}' "$URL")
             echo "attempt $i -> $code"
-            [ "$code" = "200" ] && { grep -o 'Deployed via rishu.dev[^<]*' /tmp/out.html || true; exit 0; }
+            [ "$code" = "200" ] && { grep -o 'Deployed via[^<]*' /tmp/out.html || true; exit 0; }
             sleep 10
           done
-          echo "::error::Live URL did not return 200"
+          echo "::error::Live production URL did not return 200"
           exit 1
 
       - name: Upload deploy log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deploy-log
-          path: |
-            dryrun.txt
+          name: deploy-log-production
+          path: dryrun.txt
           if-no-files-found: ignore
